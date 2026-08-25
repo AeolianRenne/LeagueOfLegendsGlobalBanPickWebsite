@@ -209,9 +209,7 @@ async def create_admin_series(request: CreateSeriesRequest, _: None = Depends(re
 @app.get("/api/admin/series")
 async def list_series(_: None = Depends(require_admin)) -> list[dict[str, Any]]:
     """List recent series for management."""
-    with database.connection() as connection:
-        rows = connection.execute("SELECT code, best_of, global_draft, status, created_at FROM series ORDER BY id DESC LIMIT 50").fetchall()
-    return [{**dict(row), "global_draft": bool(row["global_draft"])} for row in rows]
+    return drafts.management_series()
 
 
 @app.post("/api/admin/series/{code}/next")
@@ -227,11 +225,31 @@ async def admin_next(code: str, _: None = Depends(require_admin)) -> dict[str, A
 
 @app.post("/api/admin/series/{code}/end")
 async def admin_end(code: str, _: None = Depends(require_admin)) -> dict[str, Any]:
-    """End a series early."""
+    """Archive a series and preserve its resumable progress."""
     try:
         state = drafts.end_series(code)
         await connections.broadcast(code, state)
         return state
+    except DraftError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/admin/series/{code}/restore")
+async def admin_restore(code: str, _: None = Depends(require_admin)) -> dict[str, Any]:
+    """Restore a previously archived series."""
+    try:
+        state = drafts.restore_series(code)
+        await connections.broadcast(code, state)
+        return state
+    except DraftError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/admin/series/{code}/links/reissue")
+async def admin_reissue_links(code: str, _: None = Depends(require_admin)) -> dict[str, str]:
+    """Explicitly generate replacement links for legacy series without stored tokens."""
+    try:
+        return drafts.reissue_links(code)
     except DraftError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

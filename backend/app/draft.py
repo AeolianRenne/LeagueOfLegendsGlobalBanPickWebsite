@@ -64,8 +64,8 @@ class DraftService:
                 token = secrets.token_urlsafe(32)
                 tokens[role] = token
                 connection.execute(
-                    "INSERT INTO access_links(series_id, role, token_hash) VALUES (?, ?, ?)",
-                    (series_id, role, token_hash(token)),
+                    "INSERT INTO access_links(series_id, role, token_hash, token_value) VALUES (?, ?, ?, ?)",
+                    (series_id, role, token_hash(token), token),
                 )
         return self._links(code, tokens) | {"code": code, "best_of": best_of, "global_draft": global_draft}
 
@@ -88,6 +88,8 @@ class DraftService:
             raise DraftError("观战链接不能确认准备。")
         with self.database.connection() as connection:
             series, game = self._current(connection, code)
+            if series["status"] == "ended":
+                raise DraftError("赛事已归档，恢复后才能操作。")
             if game["status"] != "waiting_ready":
                 raise DraftError("当前对局不在准备阶段。")
             connection.execute(f"UPDATE games SET {role}_ready = 1 WHERE id = ?", (game["id"],))
@@ -101,6 +103,8 @@ class DraftService:
         """Store the active team's provisional champion selection."""
         with self.database.connection() as connection:
             series, game = self._current(connection, code)
+            if series["status"] == "ended":
+                raise DraftError("赛事已归档，恢复后才能操作。")
             self._advance_expired(connection, series, game)
             game = connection.execute("SELECT * FROM games WHERE id = ?", (game["id"],)).fetchone()
             if role not in {"blue", "red"} or game["status"] not in {"drafting", "paused"}:
@@ -116,6 +120,8 @@ class DraftService:
         """Confirm a ban, pick, or empty ban for the current phase."""
         with self.database.connection() as connection:
             series, game = self._current(connection, code)
+            if series["status"] == "ended":
+                raise DraftError("赛事已归档，恢复后才能操作。")
             self._advance_expired(connection, series, game)
             game = connection.execute("SELECT * FROM games WHERE id = ?", (game["id"],)).fetchone()
             if role not in {"blue", "red"}:
@@ -153,18 +159,70 @@ class DraftService:
         return self.state(code)
 
     def end_series(self, code: str) -> dict[str, Any]:
-        """End a series early and release its active slot."""
+        """Archive a series while retaining enough state to resume it later."""
         with self.database.connection() as connection:
-            result = connection.execute("UPDATE series SET status = 'ended', ended_at = ? WHERE code = ?", (now(), code))
-            if not result.rowcount:
+            series = connection.execute("SELECT * FROM series WHERE code = ?", (code,)).fetchone()
+            if not series:
                 raise DraftError("赛事不存在。")
+            if series["status"] == "ended":
+                raise DraftError("赛事已经归档。")
+            connection.execute(
+                "UPDATE series SET status = 'ended', ended_at = ?, status_before_archive = ? WHERE id = ?",
+                (now(), series["status"], series["id"]),
+            )
+            # Do not leave a stale countdown visible through an archived room.
+            # `restore_series` assigns a fresh phase deadline when appropriate.
+            connection.execute(
+                "UPDATE games SET deadline_at = NULL WHERE series_id = ? AND game_number = (SELECT MAX(game_number) FROM games WHERE series_id = ?)",
+                (series["id"], series["id"]),
+            )
         return self.state(code)
+
+    def restore_series(self, code: str) -> dict[str, Any]:
+        """Restore a deliberately archived series at its prior draft progress."""
+        with self.database.connection() as connection:
+            series, game = self._current(connection, code)
+            if series["status"] != "ended":
+                raise DraftError("当前赛事未归档。")
+            status = series["status_before_archive"]
+            if not status:
+                raise DraftError("旧赛事未保存可恢复进度，请重新创建赛事。")
+            connection.execute("UPDATE series SET status = ?, ended_at = NULL, status_before_archive = NULL WHERE id = ?", (status, series["id"]))
+            if status == "drafting" and game["status"] == "drafting":
+                self._start_phase(connection, game["id"], game["phase_index"])
+        return self.state(code)
+
+    def management_series(self) -> list[dict[str, Any]]:
+        """List recent series and their stored administrator capability URLs."""
+        with self.database.connection() as connection:
+            rows = connection.execute("SELECT id, code, best_of, global_draft, status, created_at FROM series ORDER BY id DESC LIMIT 50").fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                link_rows = connection.execute("SELECT role, token_value FROM access_links WHERE series_id = ?", (row["id"],)).fetchall()
+                tokens = {link["role"]: link["token_value"] for link in link_rows}
+                links = self._links(row["code"], tokens) if all(tokens.get(role) for role in ("blue", "red", "spectator")) else None
+                result.append({**dict(row), "global_draft": bool(row["global_draft"]), "links": links, "links_reissuable": links is None})
+        return result
+
+    def reissue_links(self, code: str) -> dict[str, str]:
+        """Explicitly replace unrecoverable legacy capability links with new ones."""
+        with self.database.connection() as connection:
+            series = connection.execute("SELECT id FROM series WHERE code = ?", (code,)).fetchone()
+            if not series:
+                raise DraftError("赛事不存在。")
+            tokens = {role: secrets.token_urlsafe(32) for role in ("blue", "red", "spectator")}
+            for role, token in tokens.items():
+                connection.execute("UPDATE access_links SET token_hash = ?, token_value = ? WHERE series_id = ? AND role = ?", (token_hash(token), token, series["id"], role))
+        return self._links(code, tokens)
 
     def state(self, code: str) -> dict[str, Any]:
         """Return a serializable, current draft snapshot."""
         with self.database.connection() as connection:
             series, game = self._current(connection, code)
-            self._advance_expired(connection, series, game)
+            # An archive is a hard freeze: opening an old capability link must
+            # never consume a deadline or mutate the stored draft progress.
+            if series["status"] != "ended":
+                self._advance_expired(connection, series, game)
             series, game = self._current(connection, code)
             actions = connection.execute("SELECT * FROM draft_actions WHERE game_id = ? ORDER BY phase_index", (game["id"],)).fetchall()
             heroes = connection.execute("SELECT * FROM heroes WHERE catalogue_id = ? ORDER BY name", (series["catalogue_id"],)).fetchall()
@@ -172,7 +230,7 @@ class DraftService:
         action_data = [dict(row) for row in actions]
         used = {row["hero_id"] for row in actions if row["hero_id"]}
         current = None
-        if game["status"] in {"drafting", "paused"} and game["phase_index"] < len(PHASES):
+        if series["status"] != "ended" and game["status"] in {"drafting", "paused"} and game["phase_index"] < len(PHASES):
             kind, team = PHASES[game["phase_index"]]
             current = {"kind": kind, "team": team, "phase_index": game["phase_index"]}
         return {

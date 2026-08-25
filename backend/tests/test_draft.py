@@ -90,3 +90,24 @@ def test_pick_timeout_records_the_timed_out_team(tmp_path: Path) -> None:
 
     assert state["game"]["status"] == "paused"
     assert state["game"]["timeout_team"] == "blue"
+
+
+def test_archived_series_freezes_old_links_and_can_restore_progress(tmp_path: Path) -> None:
+    """Archiving is read-only until an administrator deliberately restores it."""
+    service = make_service(tmp_path)
+    code = service.create_series(1, False, "test")["code"]
+    service.set_ready(code, "blue")
+    service.end_series(code)
+
+    archived = service.state(code)
+    assert archived["series"]["status"] == "ended"
+    assert archived["current"] is None
+    assert archived["game"]["deadline_at"] is None
+    with pytest.raises(DraftError, match="归档"):
+        service.set_ready(code, "red")
+
+    restored = service.restore_series(code)
+    assert restored["series"]["status"] == "waiting_ready"
+    assert restored["game"]["blue_ready"] is True
+    service.set_ready(code, "red")
+    assert service.state(code)["series"]["status"] == "drafting"

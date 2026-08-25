@@ -72,12 +72,14 @@ class Database:
                     catalogue_id INTEGER NOT NULL REFERENCES catalogues(id),
                     created_by TEXT NOT NULL,
                     created_at TEXT NOT NULL,
-                    ended_at TEXT
+                    ended_at TEXT,
+                    status_before_archive TEXT
                 );
                 CREATE TABLE IF NOT EXISTS access_links (
                     series_id INTEGER NOT NULL REFERENCES series(id),
                     role TEXT NOT NULL CHECK (role IN ('blue', 'red', 'spectator')),
                     token_hash TEXT NOT NULL UNIQUE,
+                    token_value TEXT,
                     PRIMARY KEY (series_id, role)
                 );
                 CREATE TABLE IF NOT EXISTS games (
@@ -109,6 +111,12 @@ class Database:
             game_columns = {row["name"] for row in connection.execute("PRAGMA table_info(games)")}
             if "timeout_team" not in game_columns:
                 connection.execute("ALTER TABLE games ADD COLUMN timeout_team TEXT CHECK (timeout_team IN ('blue', 'red'))")
+            series_columns = {row["name"] for row in connection.execute("PRAGMA table_info(series)")}
+            if "status_before_archive" not in series_columns:
+                connection.execute("ALTER TABLE series ADD COLUMN status_before_archive TEXT")
+            access_link_columns = {row["name"] for row in connection.execute("PRAGMA table_info(access_links)")}
+            if "token_value" not in access_link_columns:
+                connection.execute("ALTER TABLE access_links ADD COLUMN token_value TEXT")
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
