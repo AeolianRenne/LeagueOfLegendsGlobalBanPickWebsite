@@ -68,6 +68,8 @@ class OpggMcpProvider:
         heroes = normalize_mcp(champions, lanes)
         if not heroes:
             raise SyncError("OP.GG MCP 未返回可用英雄资料。")
+        if not any(hero.roles for hero in heroes):
+            raise SyncError("OP.GG MCP 未返回可用分路资料。")
         return heroes
 
     async def _call(self, client: httpx.AsyncClient, headers: dict[str, str], request_id: int, name: str, arguments: dict[str, Any]) -> Any:
@@ -93,7 +95,7 @@ class OpggPublicPageProvider:
             for response in responses:
                 response.raise_for_status()
             heroes = normalize_public_html(responses[0].text)
-            if not heroes:
+            if not heroes or not any(hero.roles for hero in heroes):
                 heroes = await fetch_ddragon_heroes(client)
                 heroes = apply_opgg_roles(heroes, {
                     role: response.text

@@ -21,3 +21,12 @@ def test_public_position_pages_override_static_role_heuristics() -> None:
     heroes = apply_opgg_roles([hero], {"TOP": "Ranking table Aatrox", "JUNGLE": "Ranking table Lee Sin"})
 
     assert heroes[0].roles == ["TOP"]
+
+
+def test_mcp_champions_without_positions_are_not_treated_as_lane_data() -> None:
+    heroes = normalize_mcp(
+        {"data": {"champions": [{"id": "Aatrox", "name": "亚托克斯", "title": "暗裔剑魔"}]}},
+        {"data": {"champions": []}},
+    )
+
+    assert heroes[0].roles == []
