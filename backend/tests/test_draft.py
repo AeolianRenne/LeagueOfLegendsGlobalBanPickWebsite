@@ -111,3 +111,27 @@ def test_archived_series_freezes_old_links_and_can_restore_progress(tmp_path: Pa
     assert restored["game"]["blue_ready"] is True
     service.set_ready(code, "red")
     assert service.state(code)["series"]["status"] == "drafting"
+
+
+def test_extend_best_of_only_moves_upward_and_preserves_progress(tmp_path: Path) -> None:
+    """A completed BO1 can become a BO3 without replaying its first game."""
+    service = make_service(tmp_path)
+    code = service.create_series(1, False, "test")["code"]
+    service.set_ready(code, "blue")
+    service.set_ready(code, "red")
+    pick_number = 0
+    for kind, team in PHASES:
+        if kind == "ban":
+            service.act(code, team, None)
+        else:
+            hero_id = f"hero-{pick_number}"
+            service.preselect(code, team, hero_id)
+            service.act(code, team, hero_id)
+            pick_number += 1
+
+    extended = service.extend_best_of(code, 3)
+    assert extended["series"]["best_of"] == 3
+    assert extended["series"]["status"] == "awaiting_next"
+    assert extended["game"]["number"] == 1
+    with pytest.raises(DraftError, match="只能向上"):
+        service.extend_best_of(code, 1)

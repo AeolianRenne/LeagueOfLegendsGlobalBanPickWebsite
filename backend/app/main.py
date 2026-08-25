@@ -28,6 +28,10 @@ class CreateSeriesRequest(BaseModel):
     global_draft: bool = True
 
 
+class ExtendSeriesRequest(BaseModel):
+    best_of: int = 1
+
+
 class HeroRequest(BaseModel):
     hero_id: str = Field(min_length=1, max_length=128)
 
@@ -223,6 +227,17 @@ async def admin_next(code: str, _: None = Depends(require_admin)) -> dict[str, A
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.post("/api/admin/series/{code}/format")
+async def admin_extend_format(code: str, request: ExtendSeriesRequest, _: None = Depends(require_admin)) -> dict[str, Any]:
+    """Increase an archived or completed series to a longer format."""
+    try:
+        state = drafts.extend_best_of(code, request.best_of)
+        await connections.broadcast(code, state)
+        return state
+    except DraftError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.post("/api/admin/series/{code}/end")
 async def admin_end(code: str, _: None = Depends(require_admin)) -> dict[str, Any]:
     """Archive a series and preserve its resumable progress."""
@@ -338,6 +353,17 @@ async def bot_next(code: str, _: None = Depends(require_bot)) -> dict[str, Any]:
     """Optional bot endpoint to advance a series."""
     try:
         state = drafts.advance_game(code)
+        await connections.broadcast(code, state)
+        return state
+    except DraftError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/internal/series/{code}/format")
+async def bot_extend_format(code: str, request: ExtendSeriesRequest, _: None = Depends(require_bot)) -> dict[str, Any]:
+    """Optional bot endpoint to increase a series format."""
+    try:
+        state = drafts.extend_best_of(code, request.best_of)
         await connections.broadcast(code, state)
         return state
     except DraftError as error:

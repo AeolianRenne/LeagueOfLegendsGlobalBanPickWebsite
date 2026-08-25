@@ -158,6 +158,25 @@ class DraftService:
             connection.execute("UPDATE series SET status = 'waiting_ready' WHERE id = ?", (series["id"],))
         return self.state(code)
 
+    def extend_best_of(self, code: str, best_of: int) -> dict[str, Any]:
+        """Increase a series format without resetting any completed games."""
+        if best_of not in {1, 3, 5}:
+            raise DraftError("赛制仅支持 BO1、BO3 或 BO5。")
+        with self.database.connection() as connection:
+            series = connection.execute("SELECT * FROM series WHERE code = ?", (code,)).fetchone()
+            if not series:
+                raise DraftError("赛事不存在。")
+            if best_of <= series["best_of"]:
+                raise DraftError("赛制只能向上扩展。")
+            completed_games = connection.execute("SELECT MAX(game_number) AS number FROM games WHERE series_id = ?", (series["id"],)).fetchone()["number"]
+            status = "awaiting_next" if series["status"] == "complete" and completed_games < best_of else series["status"]
+            archived_status = "awaiting_next" if series["status_before_archive"] == "complete" and completed_games < best_of else series["status_before_archive"]
+            connection.execute(
+                "UPDATE series SET best_of = ?, status = ?, status_before_archive = ? WHERE id = ?",
+                (best_of, status, archived_status, series["id"]),
+            )
+        return self.state(code)
+
     def end_series(self, code: str) -> dict[str, Any]:
         """Archive a series while retaining enough state to resume it later."""
         with self.database.connection() as connection:

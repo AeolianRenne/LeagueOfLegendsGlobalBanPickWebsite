@@ -94,13 +94,20 @@ class OpggPublicPageProvider:
             )
             for response in responses:
                 response.raise_for_status()
-            heroes = normalize_public_html(responses[0].text)
-            if not heroes or not any(hero.roles for hero in heroes):
-                heroes = await fetch_ddragon_heroes(client)
-                heroes = apply_opgg_roles(heroes, {
-                    role: response.text
-                    for role, response in zip(OPGG_POSITION_QUERIES, responses[1:], strict=True)
-                })
+            role_pages = {
+                role: response.text
+                for role, response in zip(OPGG_POSITION_QUERIES, responses[1:], strict=True)
+            }
+            heroes = apply_opgg_roles(normalize_public_html(responses[0].text), role_pages)
+            try:
+                # OP.GG's rendered catalogue can expose only a partial set of
+                # position fields. Riot metadata guarantees a role fallback for
+                # every hero, while the OP.GG position pages still take priority.
+                heroes = apply_opgg_roles(await fetch_ddragon_heroes(client), role_pages)
+            except Exception:
+                # A usable public-page catalogue remains better than failing a
+                # manual refresh solely because the static fallback is down.
+                pass
         if not heroes:
             raise SyncError("OP.GG 公开英雄页面未包含可用资料。")
         return heroes
