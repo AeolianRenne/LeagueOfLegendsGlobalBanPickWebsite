@@ -154,13 +154,15 @@ class HeroSynchronizer:
         summary = {"hero_count": len(heroes), "source": source}
         with self.database.connection() as connection:
             catalogue_id = connection.execute("INSERT INTO catalogues(source, created_at, summary_json) VALUES (?, ?, ?)", (source, now(), json.dumps(summary))).lastrowid
+            overrides = {row["hero_id"]: json.loads(row["roles_json"]) for row in connection.execute("SELECT hero_id, roles_json FROM hero_role_overrides")}
             for hero in heroes:
                 cached = self.image_dir / (re.sub(r"[^a-zA-Z0-9_-]", "_", hero.hero_id) + ".png")
                 icon_url = f"/hero-images/{cached.name}" if cached.exists() else hero.icon_url
+                roles = overrides.get(hero.hero_id, hero.roles)
                 connection.execute(
                     """INSERT INTO heroes(catalogue_id, hero_id, slug, name, title, icon_url, roles_json, win_rate, pick_rate, ban_rate)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (catalogue_id, hero.hero_id, hero.slug, hero.name, hero.title, icon_url, json.dumps(hero.roles), hero.win_rate, hero.pick_rate, hero.ban_rate),
+                    (catalogue_id, hero.hero_id, hero.slug, hero.name, hero.title, icon_url, json.dumps(roles), hero.win_rate, hero.pick_rate, hero.ban_rate),
                 )
         return int(catalogue_id)
 
@@ -283,6 +285,8 @@ def apply_opgg_roles(heroes: list[Hero], role_pages: dict[str, str]) -> list[Her
             role for role, page in role_pages.items()
             if _champion_mentioned(hero.slug, page) or _champion_mentioned(hero.name, page)
         ]
+        if len(exact_roles) == len(role_pages):
+            exact_roles = []
         result.append(Hero(
             hero_id=hero.hero_id,
             slug=hero.slug,

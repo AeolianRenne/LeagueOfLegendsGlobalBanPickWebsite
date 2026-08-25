@@ -10,6 +10,7 @@ import pytest
 
 from app.database import Database, now
 from app.draft import PHASES, DraftError, DraftService
+from app.hero_sync import Hero, HeroSynchronizer
 from app.settings import Settings
 
 
@@ -152,3 +153,25 @@ def test_delete_series_only_allows_terminal_records(tmp_path: Path) -> None:
     with service.database.connection() as connection:
         assert connection.execute("SELECT COUNT(*) AS count FROM series").fetchone()["count"] == 0
         assert connection.execute("SELECT COUNT(*) AS count FROM heroes").fetchone()["count"] == 0
+
+
+def test_admin_role_override_updates_current_catalogue(tmp_path: Path) -> None:
+    """Manual lane choices are normalized and stored for future syncs."""
+    service = make_service(tmp_path)
+
+    updated = service.update_hero_roles("hero-0", ["MIDDLE", "TOP"])
+
+    assert updated == {"hero_id": "hero-0", "roles": ["MIDDLE", "TOP"]}
+    with service.database.connection() as connection:
+        hero = connection.execute("SELECT roles_json FROM heroes WHERE hero_id = 'hero-0'").fetchone()
+        override = connection.execute("SELECT roles_json FROM hero_role_overrides WHERE hero_id = 'hero-0'").fetchone()
+    assert json.loads(hero["roles_json"]) == ["MIDDLE", "TOP"]
+    assert json.loads(override["roles_json"]) == ["MIDDLE", "TOP"]
+
+    HeroSynchronizer(service.database, tmp_path / "images")._store(
+        "test",
+        [Hero("hero-0", "hero-0", "Hero 0", "", "", ["BOTTOM"])],
+    )
+    with service.database.connection() as connection:
+        refreshed = connection.execute("SELECT roles_json FROM heroes WHERE catalogue_id = (SELECT MAX(id) FROM catalogues) AND hero_id = 'hero-0'").fetchone()
+    assert json.loads(refreshed["roles_json"]) == ["MIDDLE", "TOP"]

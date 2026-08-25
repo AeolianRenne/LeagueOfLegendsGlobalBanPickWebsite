@@ -63,6 +63,11 @@ class Database:
                     ban_rate REAL,
                     PRIMARY KEY (catalogue_id, hero_id)
                 );
+                CREATE TABLE IF NOT EXISTS hero_role_overrides (
+                    hero_id TEXT PRIMARY KEY,
+                    roles_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS series (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     code TEXT NOT NULL UNIQUE,

@@ -23,6 +23,15 @@ def test_public_position_pages_override_static_role_heuristics() -> None:
     assert heroes[0].roles == ["TOP"]
 
 
+def test_identical_position_pages_do_not_assign_every_lane() -> None:
+    """A public page that ignores its position filter falls back to static roles."""
+    hero = Hero("Aatrox", "Aatrox", "亚托克斯", "暗裔剑魔", "https://example.test/a.png", ["TOP"])
+
+    heroes = apply_opgg_roles([hero], {role: "Aatrox" for role in ("TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY")})
+
+    assert heroes[0].roles == ["TOP"]
+
+
 def test_mcp_champions_without_positions_are_not_treated_as_lane_data() -> None:
     heroes = normalize_mcp(
         {"data": {"champions": [{"id": "Aatrox", "name": "亚托克斯", "title": "暗裔剑魔"}]}},

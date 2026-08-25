@@ -36,6 +36,10 @@ class HeroRequest(BaseModel):
     hero_id: str = Field(min_length=1, max_length=128)
 
 
+class HeroRolesRequest(BaseModel):
+    roles: list[str] = Field(min_length=1, max_length=5)
+
+
 class SettingsRequest(BaseModel):
     refresh_interval_seconds: int = Field(ge=0, le=2_592_000)
     max_active_matches: int = Field(ge=1, le=100)
@@ -199,6 +203,21 @@ async def sync_heroes(_: None = Depends(require_admin)) -> dict[str, Any]:
     if not result["ok"]:
         raise HTTPException(status_code=502, detail=result)
     return result
+
+
+@app.get("/api/admin/heroes")
+async def list_admin_heroes(_: None = Depends(require_admin)) -> list[dict[str, Any]]:
+    """Return the latest heroes for manual lane classification."""
+    return drafts.management_heroes()
+
+
+@app.put("/api/admin/heroes/{hero_id}/roles")
+async def update_admin_hero_roles(hero_id: str, request: HeroRolesRequest, _: None = Depends(require_admin)) -> dict[str, Any]:
+    """Persist an administrator's lane selection for one hero."""
+    try:
+        return drafts.update_hero_roles(hero_id, request.roles)
+    except DraftError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.post("/api/admin/series")

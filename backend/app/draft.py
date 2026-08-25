@@ -18,6 +18,7 @@ PHASES: tuple[tuple[str, str], ...] = (
     ("pick", "red"), ("pick", "blue"), ("pick", "blue"), ("pick", "red"),
 )
 ACTIVE_SERIES_STATUSES = ("waiting_ready", "drafting", "paused", "awaiting_next")
+VALID_ROLES = {"TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"}
 
 
 class DraftError(ValueError):
@@ -230,6 +231,35 @@ class DraftService:
             if not remaining:
                 connection.execute("DELETE FROM heroes WHERE catalogue_id = ?", (series["catalogue_id"],))
                 connection.execute("DELETE FROM catalogues WHERE id = ?", (series["catalogue_id"],))
+
+    def management_heroes(self) -> list[dict[str, Any]]:
+        """Return the latest catalogue for the administrator role editor."""
+        with self.database.connection() as connection:
+            catalogue = connection.execute("SELECT id FROM catalogues ORDER BY id DESC LIMIT 1").fetchone()
+            if not catalogue:
+                return []
+            rows = connection.execute("SELECT hero_id, name, title, icon_url, roles_json FROM heroes WHERE catalogue_id = ? ORDER BY name", (catalogue["id"],)).fetchall()
+        return [{**dict(row), "roles": __import__("json").loads(row["roles_json"])} for row in rows]
+
+    def update_hero_roles(self, hero_id: str, roles: list[str]) -> dict[str, Any]:
+        """Persist an administrator role override and apply it to the latest catalogue."""
+        normalized = sorted({role.strip().upper() for role in roles if isinstance(role, str) and role.strip().upper() in VALID_ROLES})
+        if not normalized:
+            raise DraftError("至少需要选择一个分路。")
+        if len(normalized) != len(set(roles)) or any(not isinstance(role, str) or role.strip().upper() not in VALID_ROLES for role in roles):
+            raise DraftError("分路配置包含无效值。")
+        with self.database.connection() as connection:
+            catalogue = connection.execute("SELECT id FROM catalogues ORDER BY id DESC LIMIT 1").fetchone()
+            if not catalogue:
+                raise DraftError("尚无英雄资料，请先同步英雄。")
+            result = connection.execute("UPDATE heroes SET roles_json = ? WHERE catalogue_id = ? AND hero_id = ?", (__import__("json").dumps(normalized), catalogue["id"], hero_id))
+            if not result.rowcount:
+                raise DraftError("英雄不存在于当前资料版本。")
+            connection.execute(
+                "INSERT INTO hero_role_overrides(hero_id, roles_json, updated_at) VALUES (?, ?, ?) ON CONFLICT(hero_id) DO UPDATE SET roles_json = excluded.roles_json, updated_at = excluded.updated_at",
+                (hero_id, __import__("json").dumps(normalized), now()),
+            )
+        return {"hero_id": hero_id, "roles": normalized}
 
     def management_series(self) -> list[dict[str, Any]]:
         """List recent series and their stored administrator capability URLs."""
