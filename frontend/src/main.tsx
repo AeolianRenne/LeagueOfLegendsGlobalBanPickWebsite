@@ -16,10 +16,21 @@ type State = {
   global_used_hero_ids: string[];
 };
 
+function errorMessage(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && "errors" in detail) {
+    const errors = (detail as { errors?: unknown }).errors;
+    if (Array.isArray(errors) && errors.every((error) => typeof error === "string")) {
+      return `英雄同步失败：${errors.join("；")}`;
+    }
+  }
+  return "请求失败，请稍后重试。";
+}
+
 async function request<T>(url: string, method = "GET", body?: unknown): Promise<T> {
   const response = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined, credentials: "same-origin" });
   const value = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof value.detail === "string" ? value.detail : "请求失败，请稍后重试。");
+  if (!response.ok) throw new Error(errorMessage(value.detail));
   return value as T;
 }
 
@@ -87,7 +98,20 @@ function Admin() {
   const [loggedIn, setLoggedIn] = useState(false); const [password, setPassword] = useState(""); const [series, setSeries] = useState<Array<{ code: string; best_of: number; global_draft: boolean; status: string }>>([]); const [bestOf, setBestOf] = useState(1); const [globalDraft, setGlobalDraft] = useState(true); const [refresh, setRefresh] = useState(0); const [limit, setLimit] = useState(1); const [message, setMessage] = useState(""); const [links, setLinks] = useState<Record<string, string> | null>(null);
   const load = async () => { try { await request("/api/admin/me"); setLoggedIn(true); const [items, config] = await Promise.all([request<typeof series>("/api/admin/series"), request<{ refresh_interval_seconds: number; max_active_matches: number }>("/api/admin/settings")]); setSeries(items); setRefresh(config.refresh_interval_seconds); setLimit(config.max_active_matches); } catch { setLoggedIn(false); } };
   useEffect(() => { load(); }, []);
-  const run = async (operation: () => Promise<unknown>) => { try { setMessage(""); await operation(); await load(); setMessage("操作完成。"); } catch (reason) { setMessage(reason instanceof Error ? reason.message : "操作失败。"); } };
+  const run = async (operation: () => Promise<unknown>) => {
+    if (document.body.dataset.adminPending === "true") return;
+    document.body.dataset.adminPending = "true";
+    setMessage("正在处理，请稍候…");
+    try {
+      await operation();
+      await load();
+      setMessage("操作完成。");
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "操作失败。");
+    } finally {
+      delete document.body.dataset.adminPending;
+    }
+  };
   if (!loggedIn) return <main className="admin-login"><div><p className="eyebrow">GLOBAL BANPICK</p><h1>赛事管理后台</h1><form onSubmit={(event: FormEvent) => { event.preventDefault(); run(async () => { await request("/api/admin/login", "POST", { password }); }); }}><input type="password" placeholder="管理员密码" value={password} onChange={(event) => setPassword(event.target.value)} /><button className="primary">登录</button></form>{message && <p className="error">{message}</p>}</div></main>;
   return <main className="admin"><header><div><p className="eyebrow">GLOBAL BANPICK</p><h1>赛事控制台</h1></div><button onClick={() => run(() => request("/api/admin/logout", "POST"))}>退出登录</button></header>{message && <p className="message">{message}</p>}<section className="admin-grid"><article><h2>创建赛事</h2><label>赛制<select value={bestOf} onChange={(event) => setBestOf(Number(event.target.value))}><option value={1}>BO1</option><option value={3}>BO3</option><option value={5}>BO5</option></select></label><label className="checkbox"><input type="checkbox" checked={globalDraft} onChange={(event) => setGlobalDraft(event.target.checked)} /> 全局 BP</label><button className="primary" onClick={() => run(async () => { const created = await request<Record<string, string>>("/api/admin/series", "POST", { best_of: bestOf, global_draft: globalDraft }); setLinks(created); })}>创建并生成链接</button>{links && <div className="links"><b>赛事 {links.code}</b>{["blue", "red", "spectator"].map((kind) => <label key={kind}>{kind === "blue" ? "蓝方" : kind === "red" ? "红方" : "观战"}<input readOnly value={links[kind] ?? ""} onFocus={(event) => event.currentTarget.select()} /></label>)}</div>}</article><article><h2>英雄数据</h2><p>OP.GG MCP 优先，公开英雄页备用。</p><button className="primary" onClick={() => run(() => request("/api/admin/sync", "POST"))}>立即同步英雄</button><label>自动同步秒数<input type="number" min="0" value={refresh} onChange={(event) => setRefresh(Number(event.target.value))} /></label><label>最大活跃赛事<input type="number" min="1" value={limit} onChange={(event) => setLimit(Number(event.target.value))} /></label><button onClick={() => run(() => request("/api/admin/settings", "PUT", { refresh_interval_seconds: refresh, max_active_matches: limit }))}>保存设置</button></article></section><section className="series-list"><h2>最近赛事</h2>{series.map((item) => <article key={item.code}><strong>{item.code}</strong><span>BO{item.best_of} · {item.global_draft ? "全局" : "常规"} · {item.status}</span><div><button onClick={() => run(() => request(`/api/admin/series/${item.code}/next`, "POST"))}>下一局</button><button className="danger" onClick={() => run(() => request(`/api/admin/series/${item.code}/end`, "POST"))}>结束</button></div></article>)}</section></main>;
 }
