@@ -177,7 +177,7 @@ class DraftService:
             current = {"kind": kind, "team": team, "phase_index": game["phase_index"]}
         return {
             "series": {"code": series["code"], "best_of": series["best_of"], "global_draft": bool(series["global_draft"]), "status": series["status"]},
-            "game": {"number": game["game_number"], "status": game["status"], "blue_ready": bool(game["blue_ready"]), "red_ready": bool(game["red_ready"]), "deadline_at": game["deadline_at"], "blue_preselect": game["blue_preselect"], "red_preselect": game["red_preselect"]},
+            "game": {"number": game["game_number"], "status": game["status"], "blue_ready": bool(game["blue_ready"]), "red_ready": bool(game["red_ready"]), "deadline_at": game["deadline_at"], "timeout_team": game["timeout_team"], "blue_preselect": game["blue_preselect"], "red_preselect": game["red_preselect"]},
             "current": current,
             "actions": action_data,
             "heroes": [{**dict(row), "roles": __import__("json").loads(row["roles_json"])} for row in heroes],
@@ -198,7 +198,7 @@ class DraftService:
         kind, _ = PHASES[phase_index]
         seconds = self.settings.ban_seconds if kind == "ban" else self.settings.pick_seconds
         deadline = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
-        connection.execute("UPDATE games SET status = 'drafting', phase_index = ?, deadline_at = ? WHERE id = ?", (phase_index, deadline, game_id))
+        connection.execute("UPDATE games SET status = 'drafting', phase_index = ?, deadline_at = ?, timeout_team = NULL WHERE id = ?", (phase_index, deadline, game_id))
 
     def _next_phase(self, connection: Any, series: Any, game: Any) -> None:
         next_index = game["phase_index"] + 1
@@ -217,7 +217,7 @@ class DraftService:
         kind, team = PHASES[game["phase_index"]]
         selected = game[f"{team}_preselect"]
         if kind == "pick" and not selected:
-            connection.execute("UPDATE games SET status = 'paused', deadline_at = NULL WHERE id = ?", (game["id"],))
+            connection.execute("UPDATE games SET status = 'paused', deadline_at = NULL, timeout_team = ? WHERE id = ?", (team, game["id"]))
             return
         connection.execute(
             "INSERT INTO draft_actions(game_id, phase_index, action_kind, team, hero_id) VALUES (?, ?, ?, ?, ?)",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -72,3 +73,20 @@ def test_ban_can_be_empty_but_pick_cannot(tmp_path: Path) -> None:
     with pytest.raises(DraftError, match="必须确认"):
         service.act(code, "blue", None)
 
+
+def test_pick_timeout_records_the_timed_out_team(tmp_path: Path) -> None:
+    """A pick without a preselection pauses and identifies the responsible side."""
+    service = make_service(tmp_path)
+    code = service.create_series(1, False, "test")["code"]
+    service.set_ready(code, "blue")
+    service.set_ready(code, "red")
+    with service.database.connection() as connection:
+        connection.execute(
+            "UPDATE games SET phase_index = 6, status = 'drafting', deadline_at = ?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),),
+        )
+
+    state = service.state(code)
+
+    assert state["game"]["status"] == "paused"
+    assert state["game"]["timeout_team"] == "blue"

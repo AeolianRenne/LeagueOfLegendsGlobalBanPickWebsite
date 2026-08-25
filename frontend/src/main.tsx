@@ -2,118 +2,61 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
+type Locale = "zh-CN" | "en-US";
 type Role = "blue" | "red" | "spectator";
-type Hero = { hero_id: string; name: string; title: string; icon_url: string; roles: string[]; win_rate?: number | null; pick_rate?: number | null; ban_rate?: number | null };
+type Hero = { hero_id: string; name: string; title: string; icon_url: string; roles: string[] };
 type Action = { phase_index: number; action_kind: "ban" | "pick"; team: "blue" | "red"; hero_id: string | null };
 type State = {
   access_role?: Role;
   series: { code: string; best_of: number; global_draft: boolean; status: string };
-  game: { number: number; status: string; blue_ready: boolean; red_ready: boolean; deadline_at: string | null; blue_preselect: string | null; red_preselect: string | null };
+  game: { number: number; status: string; blue_ready: boolean; red_ready: boolean; deadline_at: string | null; timeout_team: "blue" | "red" | null; blue_preselect: string | null; red_preselect: string | null };
   current: { kind: "ban" | "pick"; team: "blue" | "red"; phase_index: number } | null;
-  actions: Action[];
-  heroes: Hero[];
-  used_hero_ids: string[];
-  global_used_hero_ids: string[];
+  actions: Action[]; heroes: Hero[]; used_hero_ids: string[]; global_used_hero_ids: string[];
 };
 
-function errorMessage(detail: unknown): string {
-  if (typeof detail === "string") return detail;
-  if (detail && typeof detail === "object" && "errors" in detail) {
-    const errors = (detail as { errors?: unknown }).errors;
-    if (Array.isArray(errors) && errors.every((error) => typeof error === "string")) {
-      return `英雄同步失败：${errors.join("；")}`;
-    }
-  }
-  return "请求失败，请稍后重试。";
-}
+const copy: Record<Locale, Record<string, string>> = {
+  "zh-CN": { admin:"赛事控制台",login:"登录",logout:"退出登录",password:"管理员密码",create:"创建赛事",createLinks:"创建并生成链接",format:"赛制",global:"全局 BP",normal:"常规 BP",heroes:"英雄数据",sync:"立即同步英雄",settings:"保存设置",refresh:"自动同步秒数",limit:"最大活跃赛事",recent:"最近赛事",next:"下一局",end:"结束",blue:"蓝色方",red:"红色方",spectator:"观战模式",blueCaptain:"蓝色方队长",redCaptain:"红色方队长",verifying:"正在验证队伍链接…",ready:"确认准备",readyState:"已准备",notReady:"未准备",yourTurn:"轮到你方",waiting:"等待对方",confirmBan:"确认禁用 / 空过",confirmPick:"确认选择",search:"搜索英雄或称号",all:"全部",top:"上路",jungle:"打野",middle:"中路",bottom:"下路",utility:"辅助",bans:"本局禁用",globalBans:"全局 BP 已禁用（前局已选）",empty:"暂无",pending:"待选",timeoutBlue:"蓝色方已超时",timeoutRed:"红色方已超时",waitingReady:"等待双方准备",awaitingNext:"等待下一局",complete:"系列赛已结束",paused:"BP 已暂停，等待超时方确认选择",drafting:"BP 进行中",ended:"赛事已结束",processing:"正在处理中，请稍候…",completed:"操作完成。",laneCount:"显示 {count} 位英雄",linksBlue:"蓝方",linksRed:"红方",linksSpectator:"观战",sourceHint:"OP.GG 优先，公开来源兼容回退。" },
+  "en-US": { admin:"Tournament Console",login:"Sign in",logout:"Sign out",password:"Admin password",create:"Create series",createLinks:"Create and generate links",format:"Format",global:"Global Draft",normal:"Standard Draft",heroes:"Champion data",sync:"Sync champions now",settings:"Save settings",refresh:"Auto-sync seconds",limit:"Maximum active series",recent:"Recent series",next:"Next game",end:"End",blue:"Blue side",red:"Red side",spectator:"Spectator mode",blueCaptain:"Blue captain",redCaptain:"Red captain",verifying:"Verifying team link…",ready:"Ready",readyState:"Ready",notReady:"Not ready",yourTurn:"Your turn",waiting:"Waiting for opponent",confirmBan:"Confirm ban / skip",confirmPick:"Confirm pick",search:"Search champions or titles",all:"All",top:"Top",jungle:"Jungle",middle:"Middle",bottom:"Bottom",utility:"Support",bans:"Banned this game",globalBans:"Unavailable in Global Draft (picked earlier)",empty:"None",pending:"Pending",timeoutBlue:"Blue side timed out",timeoutRed:"Red side timed out",waitingReady:"Waiting for both captains",awaitingNext:"Waiting for the next game",complete:"Series complete",paused:"Draft paused — waiting for the timed-out side",drafting:"Draft in progress",ended:"Series ended",processing:"Processing…",completed:"Done.",laneCount:"{count} champions shown",linksBlue:"Blue",linksRed:"Red",linksSpectator:"Spectator",sourceHint:"OP.GG first, with public-source fallback." },
+};
+const t = (locale: Locale, key: string, params: Record<string, string | number> = {}) => Object.entries(params).reduce((text, [name, value]) => text.replace(`{${name}}`, String(value)), copy[locale][key] ?? key);
 
-async function request<T>(url: string, method = "GET", body?: unknown): Promise<T> {
-  const response = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined, credentials: "same-origin" });
-  const value = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(errorMessage(value.detail));
-  return value as T;
-}
+function errorMessage(detail: unknown): string { if (typeof detail === "string") return detail; if (detail && typeof detail === "object" && "errors" in detail) { const errors = (detail as { errors?: unknown }).errors; if (Array.isArray(errors) && errors.every((item) => typeof item === "string")) return `英雄同步失败：${errors.join("；")}`; } return "请求失败，请稍后重试。"; }
+async function request<T>(url: string, method = "GET", body?: unknown): Promise<T> { const response = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined, credentials: "same-origin" }); const value = await response.json().catch(() => ({})); if (!response.ok) throw new Error(errorMessage(value.detail)); return value as T; }
+function useLocalePreference() { const [locale, setLocale] = useState<Locale>(() => localStorage.getItem("banpick-locale") === "en-US" ? "en-US" : "zh-CN"); const toggle = () => setLocale((current) => { const next = current === "zh-CN" ? "en-US" : "zh-CN"; localStorage.setItem("banpick-locale", next); return next; }); return [locale, toggle] as const; }
+function LanguageToggle({ locale, onToggle }: { locale: Locale; onToggle: () => void }) { return <button className="language-toggle" onClick={onToggle} title="Switch language">{locale === "zh-CN" ? "EN" : "中文"}</button>; }
+function roleLabel(locale: Locale, role: Role | null) { return role === null ? t(locale,"verifying") : role === "blue" ? t(locale,"blueCaptain") : role === "red" ? t(locale,"redCaptain") : t(locale,"spectator"); }
+function statusLabel(locale: Locale, seriesStatus: string, gameStatus: string) { if (gameStatus === "paused") return t(locale,"paused"); if (gameStatus === "waiting_ready") return t(locale,"waitingReady"); if (seriesStatus === "awaiting_next") return t(locale,"awaitingNext"); if (seriesStatus === "complete") return t(locale,"complete"); if (seriesStatus === "ended") return t(locale,"ended"); return t(locale,"drafting"); }
+function roleMatches(hero: Hero, lane: string) { if (lane === "ALL") return true; const aliases: Record<string, string> = { MID:"MIDDLE", ADC:"BOTTOM", SUPPORT:"UTILITY" }; return hero.roles.some((role) => (aliases[role.toUpperCase()] ?? role.toUpperCase()) === lane); }
 
-function heroName(state: State | null, id: string | null): string {
-  if (!id) return "空过";
-  return state?.heroes.find((hero) => hero.hero_id === id)?.name ?? id;
-}
+function HeroIcon({ hero, dimmed = false }: { hero?: Hero; dimmed?: boolean }) { return hero ? <img className={dimmed ? "hero-icon dimmed" : "hero-icon"} src={hero.icon_url} alt={hero.name} title={`${hero.name}${hero.title ? ` · ${hero.title}` : ""}`} /> : <span className="hero-placeholder" />; }
+function HeroStrip({ label, ids, heroes, global, locale }: { label: string; ids: string[]; heroes: Map<string, Hero>; global?: boolean; locale: Locale }) { return <section className={global ? "hero-strip global-strip" : "hero-strip"}><h2>{label}</h2><div className="hero-strip-icons">{ids.length ? ids.map((id, index) => <HeroIcon key={`${id}-${index}`} hero={heroes.get(id)} dimmed={global} />) : <span className="empty-strip">{t(locale,"empty")}</span>}</div></section>; }
+function PickColumn({ team, ids, heroes, locale }: { team: "blue" | "red"; ids: string[]; heroes: Map<string, Hero>; locale: Locale }) { return <aside className={`pick-column ${team}`}><h2>{t(locale,team)}</h2><div className="pick-slots">{Array.from({ length: 5 }, (_, index) => <div className="pick-slot" key={index}>{ids[index] ? <HeroIcon hero={heroes.get(ids[index])} /> : <span>{t(locale,"pending")}</span>}</div>)}</div></aside>; }
 
 function Room({ code, token }: { code: string; token: string }) {
-  const [state, setState] = useState<State | null>(null);
-  const [role, setRole] = useState<Role | null>(null);
-  const [query, setQuery] = useState("");
-  const [lane, setLane] = useState("ALL");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [seconds, setSeconds] = useState(0);
-
-  const load = async () => {
-    try {
-      const snapshot = await request<State>(`/api/room/${code}/${token}/state`);
-      setState(snapshot);
-      if (snapshot.access_role) setRole(snapshot.access_role);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法读取赛事状态。"); }
-  };
+  const [state, setState] = useState<State | null>(null); const [role, setRole] = useState<Role | null>(null); const [query, setQuery] = useState(""); const [lane, setLane] = useState("ALL"); const [selected, setSelected] = useState<string | null>(null); const [error, setError] = useState(""); const [seconds, setSeconds] = useState(0); const [locale, toggleLocale] = useLocalePreference();
+  const load = async () => { try { const snapshot = await request<State>(`/api/room/${code}/${token}/state`); setState(snapshot); if (snapshot.access_role) setRole(snapshot.access_role); } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load room state."); } };
   useEffect(() => { load(); const timer = window.setInterval(load, 2500); return () => window.clearInterval(timer); }, [code, token]);
-  useEffect(() => {
-    const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/room/${code}/${token}`);
-    socket.onmessage = (event) => setState(JSON.parse(event.data));
-    return () => socket.close();
-  }, [code, token]);
-  useEffect(() => {
-    if (!state?.game.deadline_at) return setSeconds(0);
-    const tick = () => setSeconds(Math.max(0, Math.ceil((new Date(state.game.deadline_at!).getTime() - Date.now()) / 1000)));
-    tick(); const timer = window.setInterval(tick, 250); return () => window.clearInterval(timer);
-  }, [state?.game.deadline_at]);
-
-  const activeTeam = state?.current?.team;
-  const ownTurn = role === activeTeam;
+  useEffect(() => { const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/room/${code}/${token}`); socket.onmessage = (event) => setState(JSON.parse(event.data)); return () => socket.close(); }, [code, token]);
+  useEffect(() => { if (!state?.game.deadline_at) return setSeconds(0); const tick = () => setSeconds(Math.max(0, Math.ceil((new Date(state.game.deadline_at!).getTime() - Date.now()) / 1000))); tick(); const timer = window.setInterval(tick, 250); return () => window.clearInterval(timer); }, [state?.game.deadline_at]);
+  const heroes = useMemo(() => new Map((state?.heroes ?? []).map((hero) => [hero.hero_id, hero])), [state?.heroes]);
   const unavailable = new Set([...(state?.used_hero_ids ?? []), ...(state?.global_used_hero_ids ?? [])]);
-  const heroes = useMemo(() => (state?.heroes ?? []).filter((hero) => {
-    const haystack = `${hero.name} ${hero.title}`.toLocaleLowerCase();
-    return (lane === "ALL" || hero.roles.includes(lane)) && haystack.includes(query.toLocaleLowerCase());
-  }), [state, lane, query]);
-  const action = async (path: string, body?: unknown) => { try { setError(""); const next = await request<State>(`/api/room/${code}/${token}/${path}`, "POST", body); setState(next); } catch (reason) { setError(reason instanceof Error ? reason.message : "操作失败。"); } };
-  const select = async (hero: Hero) => {
-    if (!ownTurn || unavailable.has(hero.hero_id)) return;
-    setSelected(hero.hero_id); await action("preselect", { hero_id: hero.hero_id });
-  };
-
-  const blueActions = state?.actions.filter((item) => item.team === "blue") ?? [];
-  const redActions = state?.actions.filter((item) => item.team === "red") ?? [];
-  return <main className="draft-shell">
-    <header className="draft-header"><div><p className="eyebrow">GLOBAL BANPICK · {state?.series.code ?? code}</p><h1>第 {state?.game.number ?? "-"} 局</h1></div><div className="status"><span>{state?.series.global_draft ? "全局 BP" : "常规 BP"}</span><strong>{state?.current ? `${state.current.team === "blue" ? "蓝色方" : "红色方"}${state.current.kind === "ban" ? "禁用" : "选择"}` : state?.game.status === "waiting_ready" ? "等待准备" : state?.series.status}</strong><b>{seconds ? `${seconds}s` : ""}</b></div></header>
-    {error && <p className="error">{error}</p>}
-    <section className="teams"><TeamPanel label="蓝色方" team="blue" actions={blueActions} state={state} ready={!!state?.game.blue_ready} /><section className="draft-center"><p>{role === null ? "正在验证队伍链接…" : role === "spectator" ? "观战模式" : role === "blue" ? "蓝色方队长" : "红色方队长"}</p>{state?.game.status === "waiting_ready" && role !== null && role !== "spectator" && <button className="primary" onClick={() => action("ready")}>确认准备</button>}{state?.current && <p className="turn">{ownTurn ? "轮到你方" : "等待对方"}</p>}{ownTurn && state?.current && <button className="confirm" disabled={state.current.kind === "pick" && !selected} onClick={() => action("act", selected ? { hero_id: selected } : undefined)}>{state.current.kind === "ban" ? "确认禁用 / 空过" : "确认选择"}</button>}</section><TeamPanel label="红色方" team="red" actions={redActions} state={state} ready={!!state?.game.red_ready} /></section>
-    <section className="roster"><div className="filters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索英雄或称号" />{[["ALL", "全部"], ["TOP", "上路"], ["JUNGLE", "打野"], ["MIDDLE", "中路"], ["BOTTOM", "下路"], ["UTILITY", "辅助"]].map(([value, label]) => <button key={value} className={lane === value ? "active" : ""} onClick={() => setLane(value)}>{label}</button>)}</div><div className="hero-grid">{heroes.map((hero) => <button key={hero.hero_id} className={`hero ${unavailable.has(hero.hero_id) ? "disabled" : ""} ${selected === hero.hero_id ? "selected" : ""}`} disabled={!ownTurn || unavailable.has(hero.hero_id)} onClick={() => select(hero)} title={unavailable.has(hero.hero_id) ? (state?.global_used_hero_ids.includes(hero.hero_id) ? "已在前局被选择" : "本局不可用") : hero.title}><img src={hero.icon_url} alt="" /><span>{hero.name}</span></button>)}</div></section>
-  </main>;
-}
-
-function TeamPanel({ label, team, actions, state, ready }: { label: string; team: "blue" | "red"; actions: Action[]; state: State | null; ready: boolean }) {
-  return <section className={`team ${team}`}><h2>{label}</h2><small>{ready ? "已准备" : "未准备"}</small><ol>{actions.map((item) => <li key={item.phase_index} className={item.action_kind}><span>{item.action_kind === "ban" ? "BAN" : "PICK"}</span>{heroName(state, item.hero_id)}</li>)}</ol></section>;
+  const filtered = useMemo(() => (state?.heroes ?? []).filter((hero) => roleMatches(hero,lane) && `${hero.name} ${hero.title}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [state?.heroes,lane,query]);
+  const ownTurn = role !== null && role === state?.current?.team;
+  const bans = (state?.actions ?? []).filter((item) => item.action_kind === "ban" && item.hero_id).map((item) => item.hero_id as string);
+  const picks = (team: "blue" | "red") => (state?.actions ?? []).filter((item) => item.action_kind === "pick" && item.team === team && item.hero_id).map((item) => item.hero_id as string);
+  const action = async (path: string, body?: unknown) => { try { setError(""); setState(await request<State>(`/api/room/${code}/${token}/${path}`, "POST", body)); } catch (reason) { setError(reason instanceof Error ? reason.message : "Operation failed."); } };
+  const select = async (hero: Hero) => { if (!ownTurn || unavailable.has(hero.hero_id)) return; setSelected(hero.hero_id); await action("preselect", { hero_id: hero.hero_id }); };
+  const lanes = [["ALL","all"],["TOP","top"],["JUNGLE","jungle"],["MIDDLE","middle"],["BOTTOM","bottom"],["UTILITY","utility"]] as const;
+  return <main className="draft-shell"><header className="draft-header"><div><p className="eyebrow">GLOBAL BANPICK · {state?.series.code ?? code}</p><h1>{t(locale,"blue")} VS {t(locale,"red")}</h1></div><div className="draft-status"><span>{state?.series.global_draft ? t(locale,"global") : t(locale,"normal")}</span><strong>{statusLabel(locale,state?.series.status ?? "",state?.game.status ?? "")}</strong>{seconds > 0 && <b>{seconds}s</b>}{state?.game.timeout_team && <em className="timeout">{t(locale,state.game.timeout_team === "blue" ? "timeoutBlue" : "timeoutRed")}</em>}</div><LanguageToggle locale={locale} onToggle={toggleLocale} /></header>{error && <p className="error">{error}</p>}<HeroStrip label={t(locale,"bans")} ids={bans} heroes={heroes} locale={locale} />{state?.series.global_draft && state.global_used_hero_ids.length > 0 && <HeroStrip label={t(locale,"globalBans")} ids={state.global_used_hero_ids} heroes={heroes} global locale={locale} />}<section className="draft-board"><PickColumn team="blue" ids={picks("blue")} heroes={heroes} locale={locale} /><section className="draft-center"><p className="role-label">{roleLabel(locale,role)}</p><p className="game-number">GAME {state?.game.number ?? "-"}</p>{state?.game.status === "waiting_ready" && role !== null && role !== "spectator" && <button className="primary" onClick={() => action("ready")}>{t(locale,"ready")}</button>}{state?.current && <p className="turn">{ownTurn ? t(locale,"yourTurn") : t(locale,"waiting")}</p>}{ownTurn && state?.current && <button className="confirm" disabled={state.current.kind === "pick" && !selected} onClick={() => action("act", selected ? { hero_id: selected } : undefined)}>{state.current.kind === "ban" ? t(locale,"confirmBan") : t(locale,"confirmPick")}</button>}</section><PickColumn team="red" ids={picks("red")} heroes={heroes} locale={locale} /></section><section className="roster"><div className="filters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t(locale,"search")} />{lanes.map(([value,label]) => <button key={value} className={lane === value ? "active" : ""} onClick={() => setLane(value)}>{t(locale,label)}</button>)}</div><p className="lane-count">{t(locale,"laneCount",{count:filtered.length})}</p><div className="hero-grid">{filtered.map((hero) => { const global = state?.global_used_hero_ids.includes(hero.hero_id); return <button key={hero.hero_id} className={`hero ${unavailable.has(hero.hero_id) ? "disabled" : ""} ${selected === hero.hero_id ? "selected" : ""}`} disabled={!ownTurn || unavailable.has(hero.hero_id)} onClick={() => select(hero)} title={unavailable.has(hero.hero_id) ? global ? t(locale,"globalBans") : t(locale,"bans") : hero.title}><HeroIcon hero={hero} dimmed={unavailable.has(hero.hero_id)} /><span>{hero.name}</span></button>; })}</div></section></main>;
 }
 
 function Admin() {
-  const [loggedIn, setLoggedIn] = useState(false); const [password, setPassword] = useState(""); const [series, setSeries] = useState<Array<{ code: string; best_of: number; global_draft: boolean; status: string }>>([]); const [bestOf, setBestOf] = useState(1); const [globalDraft, setGlobalDraft] = useState(true); const [refresh, setRefresh] = useState(0); const [limit, setLimit] = useState(1); const [message, setMessage] = useState(""); const [links, setLinks] = useState<Record<string, string> | null>(null);
-  const load = async () => { try { await request("/api/admin/me"); setLoggedIn(true); const [items, config] = await Promise.all([request<typeof series>("/api/admin/series"), request<{ refresh_interval_seconds: number; max_active_matches: number }>("/api/admin/settings")]); setSeries(items); setRefresh(config.refresh_interval_seconds); setLimit(config.max_active_matches); } catch { setLoggedIn(false); } };
+  const [loggedIn,setLoggedIn] = useState(false); const [password,setPassword] = useState(""); const [series,setSeries] = useState<Array<{code:string;best_of:number;global_draft:boolean;status:string}>>([]); const [bestOf,setBestOf] = useState(1); const [globalDraft,setGlobalDraft] = useState(true); const [refresh,setRefresh] = useState(0); const [limit,setLimit] = useState(1); const [message,setMessage] = useState(""); const [links,setLinks] = useState<Record<string,string> | null>(null); const [locale,toggleLocale] = useLocalePreference();
+  const load = async () => { try { await request("/api/admin/me"); setLoggedIn(true); const [items,config] = await Promise.all([request<typeof series>("/api/admin/series"),request<{refresh_interval_seconds:number;max_active_matches:number}>("/api/admin/settings")]); setSeries(items); setRefresh(config.refresh_interval_seconds); setLimit(config.max_active_matches); } catch { setLoggedIn(false); } };
   useEffect(() => { load(); }, []);
-  const run = async (operation: () => Promise<unknown>) => {
-    if (document.body.dataset.adminPending === "true") return;
-    document.body.dataset.adminPending = "true";
-    setMessage("正在处理，请稍候…");
-    try {
-      await operation();
-      await load();
-      setMessage("操作完成。");
-    } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "操作失败。");
-    } finally {
-      delete document.body.dataset.adminPending;
-    }
-  };
-  if (!loggedIn) return <main className="admin-login"><div><p className="eyebrow">GLOBAL BANPICK</p><h1>赛事管理后台</h1><form onSubmit={(event: FormEvent) => { event.preventDefault(); run(async () => { await request("/api/admin/login", "POST", { password }); }); }}><input type="password" placeholder="管理员密码" value={password} onChange={(event) => setPassword(event.target.value)} /><button className="primary">登录</button></form>{message && <p className="error">{message}</p>}</div></main>;
-  return <main className="admin"><header><div><p className="eyebrow">GLOBAL BANPICK</p><h1>赛事控制台</h1></div><button onClick={() => run(() => request("/api/admin/logout", "POST"))}>退出登录</button></header>{message && <p className="message">{message}</p>}<section className="admin-grid"><article><h2>创建赛事</h2><label>赛制<select value={bestOf} onChange={(event) => setBestOf(Number(event.target.value))}><option value={1}>BO1</option><option value={3}>BO3</option><option value={5}>BO5</option></select></label><label className="checkbox"><input type="checkbox" checked={globalDraft} onChange={(event) => setGlobalDraft(event.target.checked)} /> 全局 BP</label><button className="primary" onClick={() => run(async () => { const created = await request<Record<string, string>>("/api/admin/series", "POST", { best_of: bestOf, global_draft: globalDraft }); setLinks(created); })}>创建并生成链接</button>{links && <div className="links"><b>赛事 {links.code}</b>{["blue", "red", "spectator"].map((kind) => <label key={kind}>{kind === "blue" ? "蓝方" : kind === "red" ? "红方" : "观战"}<input readOnly value={links[kind] ?? ""} onFocus={(event) => event.currentTarget.select()} /></label>)}</div>}</article><article><h2>英雄数据</h2><p>OP.GG MCP 优先，公开英雄页备用。</p><button className="primary" onClick={() => run(() => request("/api/admin/sync", "POST"))}>立即同步英雄</button><label>自动同步秒数<input type="number" min="0" value={refresh} onChange={(event) => setRefresh(Number(event.target.value))} /></label><label>最大活跃赛事<input type="number" min="1" value={limit} onChange={(event) => setLimit(Number(event.target.value))} /></label><button onClick={() => run(() => request("/api/admin/settings", "PUT", { refresh_interval_seconds: refresh, max_active_matches: limit }))}>保存设置</button></article></section><section className="series-list"><h2>最近赛事</h2>{series.map((item) => <article key={item.code}><strong>{item.code}</strong><span>BO{item.best_of} · {item.global_draft ? "全局" : "常规"} · {item.status}</span><div><button onClick={() => run(() => request(`/api/admin/series/${item.code}/next`, "POST"))}>下一局</button><button className="danger" onClick={() => run(() => request(`/api/admin/series/${item.code}/end`, "POST"))}>结束</button></div></article>)}</section></main>;
+  const run = async (operation: () => Promise<unknown>) => { if (document.body.dataset.adminPending === "true") return; document.body.dataset.adminPending = "true"; setMessage(t(locale,"processing")); try { await operation(); await load(); setMessage(t(locale,"completed")); } catch (reason) { setMessage(reason instanceof Error ? reason.message : "Operation failed."); } finally { delete document.body.dataset.adminPending; } };
+  if (!loggedIn) return <main className="admin-login"><div><p className="eyebrow">GLOBAL BANPICK</p><h1>{t(locale,"admin")}</h1><LanguageToggle locale={locale} onToggle={toggleLocale} /><form onSubmit={(event:FormEvent) => { event.preventDefault(); run(() => request("/api/admin/login","POST",{password})); }}><input type="password" placeholder={t(locale,"password")} value={password} onChange={(event) => setPassword(event.target.value)} /><button className="primary">{t(locale,"login")}</button></form>{message && <p className="error">{message}</p>}</div></main>;
+  return <main className="admin"><header><div><p className="eyebrow">GLOBAL BANPICK</p><h1>{t(locale,"admin")}</h1></div><div className="header-actions"><LanguageToggle locale={locale} onToggle={toggleLocale} /><button onClick={() => run(() => request("/api/admin/logout","POST"))}>{t(locale,"logout")}</button></div></header>{message && <p className="message">{message}</p>}<section className="admin-grid"><article><h2>{t(locale,"create")}</h2><label>{t(locale,"format")}<select value={bestOf} onChange={(event) => setBestOf(Number(event.target.value))}><option value={1}>BO1</option><option value={3}>BO3</option><option value={5}>BO5</option></select></label><label className="checkbox"><input type="checkbox" checked={globalDraft} onChange={(event) => setGlobalDraft(event.target.checked)} /> {t(locale,"global")}</label><button className="primary" onClick={() => run(async () => { setLinks(await request<Record<string,string>>("/api/admin/series","POST",{best_of:bestOf,global_draft:globalDraft})); })}>{t(locale,"createLinks")}</button>{links && <div className="links"><b>{links.code}</b>{[["blue","linksBlue"],["red","linksRed"],["spectator","linksSpectator"]].map(([kind,label]) => <label key={kind}>{t(locale,label)}<input readOnly value={links[kind] ?? ""} onFocus={(event) => event.currentTarget.select()} /></label>)}</div>}</article><article><h2>{t(locale,"heroes")}</h2><p>{t(locale,"sourceHint")}</p><button className="primary" onClick={() => run(() => request("/api/admin/sync","POST"))}>{t(locale,"sync")}</button><label>{t(locale,"refresh")}<input type="number" min="0" value={refresh} onChange={(event) => setRefresh(Number(event.target.value))} /></label><label>{t(locale,"limit")}<input type="number" min="1" value={limit} onChange={(event) => setLimit(Number(event.target.value))} /></label><button onClick={() => run(() => request("/api/admin/settings","PUT",{refresh_interval_seconds:refresh,max_active_matches:limit}))}>{t(locale,"settings")}</button></article></section><section className="series-list"><h2>{t(locale,"recent")}</h2>{series.map((item) => <article key={item.code}><strong>{item.code}</strong><span>BO{item.best_of} · {item.global_draft ? t(locale,"global") : t(locale,"normal")} · {statusLabel(locale,item.status,item.status)}</span><div><button onClick={() => run(() => request(`/api/admin/series/${item.code}/next`,"POST"))}>{t(locale,"next")}</button><button className="danger" onClick={() => run(() => request(`/api/admin/series/${item.code}/end`,"POST"))}>{t(locale,"end")}</button></div></article>)}</section></main>;
 }
 
 const parts = location.pathname.split("/").filter(Boolean);

@@ -89,6 +89,7 @@ class Database:
                     red_ready INTEGER NOT NULL DEFAULT 0,
                     phase_index INTEGER NOT NULL DEFAULT 0,
                     deadline_at TEXT,
+                    timeout_team TEXT CHECK (timeout_team IN ('blue', 'red')),
                     blue_preselect TEXT,
                     red_preselect TEXT,
                     UNIQUE(series_id, game_number)
@@ -105,6 +106,9 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_games_series ON games(series_id, game_number);
                 """
             )
+            game_columns = {row["name"] for row in connection.execute("PRAGMA table_info(games)")}
+            if "timeout_team" not in game_columns:
+                connection.execute("ALTER TABLE games ADD COLUMN timeout_team TEXT CHECK (timeout_team IN ('blue', 'red'))")
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
