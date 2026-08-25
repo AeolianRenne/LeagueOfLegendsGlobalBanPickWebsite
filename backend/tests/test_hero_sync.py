@@ -1,6 +1,6 @@
 """Tests for tolerant OP.GG source normalization."""
 
-from app.hero_sync import normalize_mcp
+from app.hero_sync import Hero, apply_opgg_roles, normalize_mcp
 
 
 def test_merges_champion_metadata_and_lane_stats() -> None:
@@ -13,3 +13,11 @@ def test_merges_champion_metadata_and_lane_stats() -> None:
     assert heroes[0].name == "亚托克斯"
     assert heroes[0].roles == ["TOP"]
     assert heroes[0].win_rate == 51.2
+
+
+def test_public_position_pages_override_static_role_heuristics() -> None:
+    hero = Hero("Aatrox", "Aatrox", "亚托克斯", "暗裔剑魔", "https://example.test/a.png", ["JUNGLE"])
+
+    heroes = apply_opgg_roles([hero], {"TOP": "Ranking table Aatrox", "JUNGLE": "Ranking table Lee Sin"})
+
+    assert heroes[0].roles == ["TOP"]

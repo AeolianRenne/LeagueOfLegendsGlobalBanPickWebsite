@@ -16,8 +16,20 @@ from .database import Database, now
 
 MCP_URL = "https://mcp-api.op.gg/mcp"
 OPGG_CHAMPIONS_URL = "https://op.gg/lol/champions"
+DDRAGON_VERSIONS_URL = "https://ddragon.leagueoflegends.com/api/versions.json"
+DDRAGON_DATA_URL = "https://ddragon.leagueoflegends.com/cdn/{version}/data/{locale}/champion.json"
+DDRAGON_IMAGE_URL = "https://ddragon.leagueoflegends.com/cdn/{version}/img/champion/{image}"
 VALID_ROLES = {"TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"}
 ROLE_ALIASES = {"TOP": "TOP", "JUNGLE": "JUNGLE", "MID": "MIDDLE", "MIDDLE": "MIDDLE", "BOTTOM": "BOTTOM", "ADC": "BOTTOM", "SUPPORT": "UTILITY", "UTILITY": "UTILITY"}
+OPGG_POSITION_QUERIES = {"TOP": "top", "JUNGLE": "jungle", "MIDDLE": "middle", "BOTTOM": "bottom", "UTILITY": "support"}
+TAG_ROLE_FALLBACK = {
+    "Tank": ["TOP", "UTILITY"],
+    "Fighter": ["TOP", "JUNGLE"],
+    "Assassin": ["JUNGLE", "MIDDLE"],
+    "Mage": ["MIDDLE"],
+    "Marksman": ["BOTTOM"],
+    "Support": ["UTILITY"],
+}
 
 
 class SyncError(RuntimeError):
@@ -68,11 +80,25 @@ class OpggPublicPageProvider:
     """Fallback parser for publicly rendered OP.GG champion pages."""
 
     async def fetch(self) -> list[Hero]:
-        """Extract structured page state without private endpoints or session headers."""
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers={"User-Agent": "GlobalBanPick/1.0 (+self-hosted draft tool)"}) as client:
-            response = await client.get(OPGG_CHAMPIONS_URL)
-            response.raise_for_status()
-        heroes = normalize_public_html(response.text)
+        """Read OP.GG's public page, with static metadata for page-schema changes."""
+        headers = {
+            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent": "GlobalBanPick/1.0 (+self-hosted draft tool)",
+        }
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
+            responses = await asyncio.gather(
+                client.get(OPGG_CHAMPIONS_URL),
+                *(client.get(f"{OPGG_CHAMPIONS_URL}?position={position}") for position in OPGG_POSITION_QUERIES.values()),
+            )
+            for response in responses:
+                response.raise_for_status()
+            heroes = normalize_public_html(responses[0].text)
+            if not heroes:
+                heroes = await fetch_ddragon_heroes(client)
+                heroes = apply_opgg_roles(heroes, {
+                    role: response.text
+                    for role, response in zip(OPGG_POSITION_QUERIES, responses[1:], strict=True)
+                })
         if not heroes:
             raise SyncError("OP.GG 公开英雄页面未包含可用资料。")
         return heroes
@@ -190,6 +216,81 @@ def normalize_public_html(html: str) -> list[Hero]:
         if identifier:
             merged.setdefault(identifier, item)
     return [_hero(identifier, item) for identifier, item in merged.items() if item.get("name")]
+
+
+async def fetch_ddragon_heroes(client: httpx.AsyncClient) -> list[Hero]:
+    """Fetch Riot's public static champion metadata used only as a schema fallback."""
+    versions_response = await client.get(DDRAGON_VERSIONS_URL)
+    versions_response.raise_for_status()
+    versions = versions_response.json()
+    if not isinstance(versions, list) or not versions or not isinstance(versions[0], str):
+        raise SyncError("Riot 静态英雄资料未返回版本号。")
+    version = versions[0]
+    english_response, chinese_response = await asyncio.gather(
+        client.get(DDRAGON_DATA_URL.format(version=version, locale="en_US")),
+        client.get(DDRAGON_DATA_URL.format(version=version, locale="zh_CN")),
+    )
+    english_response.raise_for_status()
+    chinese_response.raise_for_status()
+    english = english_response.json().get("data", {})
+    chinese = chinese_response.json().get("data", {})
+    if not isinstance(english, dict) or not isinstance(chinese, dict):
+        raise SyncError("Riot 静态英雄资料格式无效。")
+    heroes: list[Hero] = []
+    for slug, english_item in english.items():
+        if not isinstance(english_item, dict):
+            continue
+        localized = chinese.get(slug, {})
+        if not isinstance(localized, dict):
+            localized = {}
+        image = english_item.get("image", {})
+        image_name = image.get("full") if isinstance(image, dict) else ""
+        if not isinstance(image_name, str) or not image_name:
+            continue
+        tags = english_item.get("tags", [])
+        roles = (
+            sorted({role for tag in tags if isinstance(tag, str) for role in TAG_ROLE_FALLBACK.get(tag, [])})
+            if isinstance(tags, list)
+            else []
+        )
+        heroes.append(Hero(
+            hero_id=str(english_item.get("id") or slug),
+            slug=slug,
+            name=str(localized.get("name") or english_item.get("name") or slug),
+            title=str(localized.get("title") or english_item.get("title") or ""),
+            icon_url=DDRAGON_IMAGE_URL.format(version=version, image=image_name),
+            roles=roles,
+        ))
+    if not heroes:
+        raise SyncError("Riot 静态英雄资料未包含英雄。")
+    return heroes
+
+
+def apply_opgg_roles(heroes: list[Hero], role_pages: dict[str, str]) -> list[Hero]:
+    """Prefer roles visible on OP.GG's public position pages over tag heuristics."""
+    result: list[Hero] = []
+    for hero in heroes:
+        exact_roles = [
+            role for role, page in role_pages.items()
+            if _champion_mentioned(hero.slug, page) or _champion_mentioned(hero.name, page)
+        ]
+        result.append(Hero(
+            hero_id=hero.hero_id,
+            slug=hero.slug,
+            name=hero.name,
+            title=hero.title,
+            icon_url=hero.icon_url,
+            roles=sorted(exact_roles) if exact_roles else hero.roles,
+            win_rate=hero.win_rate,
+            pick_rate=hero.pick_rate,
+            ban_rate=hero.ban_rate,
+        ))
+    return result
+
+
+def _champion_mentioned(name: str, page: str) -> bool:
+    """Match whole champion labels without treating a short name as page prose."""
+    return bool(re.search(rf"(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])", page, re.IGNORECASE))
 
 
 def _find_champion_items(value: Any) -> list[dict[str, Any]]:
