@@ -211,6 +211,26 @@ class DraftService:
                 self._start_phase(connection, game["id"], game["phase_index"])
         return self.state(code)
 
+    def delete_series(self, code: str) -> None:
+        """Permanently remove a completed or archived series and its snapshot."""
+        with self.database.connection() as connection:
+            series = connection.execute("SELECT id, catalogue_id, status FROM series WHERE code = ?", (code,)).fetchone()
+            if not series:
+                raise DraftError("赛事不存在。")
+            if series["status"] not in {"complete", "ended"}:
+                raise DraftError("只能删除已结束或已归档的赛事。")
+            connection.execute(
+                "DELETE FROM draft_actions WHERE game_id IN (SELECT id FROM games WHERE series_id = ?)",
+                (series["id"],),
+            )
+            connection.execute("DELETE FROM access_links WHERE series_id = ?", (series["id"],))
+            connection.execute("DELETE FROM games WHERE series_id = ?", (series["id"],))
+            connection.execute("DELETE FROM series WHERE id = ?", (series["id"],))
+            remaining = connection.execute("SELECT 1 FROM series WHERE catalogue_id = ? LIMIT 1", (series["catalogue_id"],)).fetchone()
+            if not remaining:
+                connection.execute("DELETE FROM heroes WHERE catalogue_id = ?", (series["catalogue_id"],))
+                connection.execute("DELETE FROM catalogues WHERE id = ?", (series["catalogue_id"],))
+
     def management_series(self) -> list[dict[str, Any]]:
         """List recent series and their stored administrator capability URLs."""
         with self.database.connection() as connection:

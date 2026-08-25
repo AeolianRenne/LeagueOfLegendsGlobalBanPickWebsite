@@ -260,6 +260,16 @@ async def admin_restore(code: str, _: None = Depends(require_admin)) -> dict[str
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.delete("/api/admin/series/{code}")
+async def admin_delete_series(code: str, _: None = Depends(require_admin)) -> dict[str, bool]:
+    """Permanently remove a terminal series and its unused hero snapshot."""
+    try:
+        drafts.delete_series(code)
+        return {"ok": True}
+    except DraftError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.post("/api/admin/series/{code}/links/reissue")
 async def admin_reissue_links(code: str, _: None = Depends(require_admin)) -> dict[str, str]:
     """Explicitly generate replacement links for legacy series without stored tokens."""

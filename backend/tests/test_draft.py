@@ -135,3 +135,20 @@ def test_extend_best_of_only_moves_upward_and_preserves_progress(tmp_path: Path)
     assert extended["game"]["number"] == 1
     with pytest.raises(DraftError, match="只能向上"):
         service.extend_best_of(code, 1)
+
+
+def test_delete_series_only_allows_terminal_records(tmp_path: Path) -> None:
+    """Deleting an archived record removes its draft data and unused catalogue."""
+    service = make_service(tmp_path)
+    code = service.create_series(1, False, "test")["code"]
+    with pytest.raises(DraftError, match="只能删除"):
+        service.delete_series(code)
+
+    service.end_series(code)
+    service.delete_series(code)
+
+    with pytest.raises(DraftError, match="赛事不存在"):
+        service.state(code)
+    with service.database.connection() as connection:
+        assert connection.execute("SELECT COUNT(*) AS count FROM series").fetchone()["count"] == 0
+        assert connection.execute("SELECT COUNT(*) AS count FROM heroes").fetchone()["count"] == 0
