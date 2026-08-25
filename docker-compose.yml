@@ -5,6 +5,7 @@ services:
       args:
         BANPICK_NODE_BASE_IMAGE: ${BANPICK_NODE_BASE_IMAGE:-node:22-alpine}
         BANPICK_PYTHON_BASE_IMAGE: ${BANPICK_PYTHON_BASE_IMAGE:-python:3.12-slim}
+        BANPICK_PIP_INDEX_URL: ${BANPICK_PIP_INDEX_URL:-https://pypi.org/simple}
     env_file: .env
     ports:
       - "127.0.0.1:8000:8000"

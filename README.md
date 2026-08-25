@@ -25,6 +25,8 @@ If the server cannot access Docker Hub, set `BANPICK_NODE_BASE_IMAGE` and
 building. For example, the DaoCloud paths are
 `m.daocloud.io/docker.io/library/node:22-alpine` and
 `m.daocloud.io/docker.io/library/python:3.12-slim`.
+If PyPI downloads stall, set `BANPICK_PIP_INDEX_URL` to a reachable Python
+package index, such as `https://mirrors.aliyun.com/pypi/simple/`.
 
 ## Operations
 

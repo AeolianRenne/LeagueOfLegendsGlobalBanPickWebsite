@@ -1,5 +1,6 @@
 ARG BANPICK_NODE_BASE_IMAGE=node:22-alpine
 ARG BANPICK_PYTHON_BASE_IMAGE=python:3.12-slim
+ARG BANPICK_PIP_INDEX_URL=https://pypi.org/simple
 
 FROM ${BANPICK_NODE_BASE_IMAGE} AS frontend
 WORKDIR /web
@@ -11,6 +12,8 @@ RUN pnpm run build
 FROM ${BANPICK_PYTHON_BASE_IMAGE}
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ARG BANPICK_PIP_INDEX_URL
+ENV PIP_INDEX_URL=${BANPICK_PIP_INDEX_URL}
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
