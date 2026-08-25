@@ -1,11 +1,14 @@
-FROM node:22-alpine AS frontend
+ARG BANPICK_NODE_BASE_IMAGE=node:22-alpine
+ARG BANPICK_PYTHON_BASE_IMAGE=python:3.12-slim
+
+FROM ${BANPICK_NODE_BASE_IMAGE} AS frontend
 WORKDIR /web
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile
 COPY frontend/ ./
 RUN pnpm run build
 
-FROM python:3.12-slim
+FROM ${BANPICK_PYTHON_BASE_IMAGE}
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY backend/requirements.txt ./

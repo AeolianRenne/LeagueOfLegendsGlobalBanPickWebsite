@@ -20,6 +20,12 @@ For production, put Caddy or Nginx in front of the container, terminate HTTPS,
 and set `BANPICK_PUBLIC_BASE_URL` to the public origin. Do not expose a database:
 the application stores SQLite under the mounted `data` directory.
 
+If the server cannot access Docker Hub, set `BANPICK_NODE_BASE_IMAGE` and
+`BANPICK_PYTHON_BASE_IMAGE` in `.env` to a reachable registry proxy before
+building. For example, the DaoCloud paths are
+`m.daocloud.io/docker.io/library/node:22-alpine` and
+`m.daocloud.io/docker.io/library/python:3.12-slim`.
+
 ## Operations
 
 - `BANPICK_CHAMPION_REFRESH_INTERVAL_SECONDS=0` disables scheduled refreshes.
@@ -45,4 +51,3 @@ python -m uvicorn app.main:app --app-dir backend --reload
 ```
 
 Run backend tests with `pytest backend/tests`.
-
