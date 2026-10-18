@@ -38,3 +38,7 @@ same `BANPICK_BOT_API_KEY`. It calls only these stable endpoints:
 
 Pass the shared key in `X-Banpick-Api-Key`. Creating a series returns `code`,
 `blue`, `red`, and `spectator` links for the QQ reply.
+
+RenneBot users can add `永ban` as the final option of `/BP 创建`, for example
+`/BP 创建 BO3 常规 永ban`. This carries every non-empty ban into later games;
+it is independent from the default Global BP rule for prior picks.

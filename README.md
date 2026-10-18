@@ -4,6 +4,10 @@ An independently deployable League of Legends draft application. It provides an
 administrator console, blue/red captain links, a spectator link, real-time draft
 updates, optional Fearless (global) draft rules, and an optional bot-facing API.
 
+The optional permanent-ban mode carries each non-empty ban into later games in
+the same series. It can be combined with Fearless draft, which continues to
+carry prior picks independently.
+
 ## Run with Docker
 
 1. Copy `.env.example` to `.env` and set strong values for both secrets.

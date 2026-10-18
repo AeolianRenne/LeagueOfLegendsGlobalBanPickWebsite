@@ -75,6 +75,34 @@ def test_ban_can_be_empty_but_pick_cannot(tmp_path: Path) -> None:
         service.act(code, "blue", None)
 
 
+def test_permanent_bans_lock_only_previous_game_bans(tmp_path: Path) -> None:
+    """Keep non-empty bans unavailable in later games without enabling global picks."""
+    service = make_service(tmp_path)
+    code = service.create_series(3, False, "test", permanent_bans=True)["code"]
+    service.set_ready(code, "blue")
+    service.set_ready(code, "red")
+    pick_number = 0
+    ban_number = 20
+    for kind, team in PHASES:
+        if kind == "ban":
+            hero_id = f"hero-{ban_number}"
+            service.act(code, team, hero_id)
+            ban_number += 1
+        else:
+            hero_id = f"hero-{pick_number}"
+            service.preselect(code, team, hero_id)
+            service.act(code, team, hero_id)
+            pick_number += 1
+
+    service.advance_game(code)
+    service.set_ready(code, "blue")
+    service.set_ready(code, "red")
+    with pytest.raises(DraftError, match="前局被禁用"):
+        service.preselect(code, "blue", "hero-20")
+    service.preselect(code, "blue", "hero-0")
+    assert "hero-20" in service.state(code)["permanent_ban_hero_ids"]
+
+
 def test_pick_timeout_records_the_timed_out_team(tmp_path: Path) -> None:
     """A pick without a preselection pauses and identifies the responsible side."""
     service = make_service(tmp_path)

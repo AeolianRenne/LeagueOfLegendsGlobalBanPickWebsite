@@ -32,7 +32,9 @@ class DraftService:
         self.database = database
         self.settings = settings
 
-    def create_series(self, best_of: int, global_draft: bool, created_by: str) -> dict[str, Any]:
+    def create_series(
+        self, best_of: int, global_draft: bool, created_by: str, permanent_bans: bool = False
+    ) -> dict[str, Any]:
         """Create a series and its reusable capability URLs."""
         if best_of not in {1, 3, 5}:
             raise DraftError("赛制只能是 BO1、BO3 或 BO5。")
@@ -52,9 +54,9 @@ class DraftService:
             while connection.execute("SELECT 1 FROM series WHERE code = ?", (code,)).fetchone():
                 code = secrets.token_urlsafe(6).replace("-", "").replace("_", "").upper()[:8]
             series_id = connection.execute(
-                """INSERT INTO series(code, best_of, global_draft, status, catalogue_id, created_by, created_at)
-                VALUES (?, ?, ?, 'waiting_ready', ?, ?, ?)""",
-                (code, best_of, int(global_draft), catalogue["id"], created_by, now()),
+                """INSERT INTO series(code, best_of, global_draft, permanent_bans, status, catalogue_id, created_by, created_at)
+                VALUES (?, ?, ?, ?, 'waiting_ready', ?, ?, ?)""",
+                (code, best_of, int(global_draft), int(permanent_bans), catalogue["id"], created_by, now()),
             ).lastrowid
             connection.execute(
                 "INSERT INTO games(series_id, game_number, status) VALUES (?, 1, 'waiting_ready')",
@@ -68,7 +70,12 @@ class DraftService:
                     "INSERT INTO access_links(series_id, role, token_hash, token_value) VALUES (?, ?, ?, ?)",
                     (series_id, role, token_hash(token), token),
                 )
-        return self._links(code, tokens) | {"code": code, "best_of": best_of, "global_draft": global_draft}
+        return self._links(code, tokens) | {
+            "code": code,
+            "best_of": best_of,
+            "global_draft": global_draft,
+            "permanent_bans": permanent_bans,
+        }
 
     def _links(self, code: str, tokens: dict[str, str]) -> dict[str, str]:
         return {role: f"{self.settings.public_base_url}/room/{code}/{token}" for role, token in tokens.items()}
@@ -264,13 +271,19 @@ class DraftService:
     def management_series(self) -> list[dict[str, Any]]:
         """List recent series and their stored administrator capability URLs."""
         with self.database.connection() as connection:
-            rows = connection.execute("SELECT id, code, best_of, global_draft, status, created_at FROM series ORDER BY id DESC LIMIT 50").fetchall()
+            rows = connection.execute("SELECT id, code, best_of, global_draft, permanent_bans, status, created_at FROM series ORDER BY id DESC LIMIT 50").fetchall()
             result: list[dict[str, Any]] = []
             for row in rows:
                 link_rows = connection.execute("SELECT role, token_value FROM access_links WHERE series_id = ?", (row["id"],)).fetchall()
                 tokens = {link["role"]: link["token_value"] for link in link_rows}
                 links = self._links(row["code"], tokens) if all(tokens.get(role) for role in ("blue", "red", "spectator")) else None
-                result.append({**dict(row), "global_draft": bool(row["global_draft"]), "links": links, "links_reissuable": links is None})
+                result.append({
+                    **dict(row),
+                    "global_draft": bool(row["global_draft"]),
+                    "permanent_bans": bool(row["permanent_bans"]),
+                    "links": links,
+                    "links_reissuable": links is None,
+                })
         return result
 
     def reissue_links(self, code: str) -> dict[str, str]:
@@ -296,6 +309,7 @@ class DraftService:
             actions = connection.execute("SELECT * FROM draft_actions WHERE game_id = ? ORDER BY phase_index", (game["id"],)).fetchall()
             heroes = connection.execute("SELECT * FROM heroes WHERE catalogue_id = ? ORDER BY name", (series["catalogue_id"],)).fetchall()
             previous_picks = self._previous_pick_ids(connection, series, game)
+            previous_bans = self._previous_ban_ids(connection, series, game)
         action_data = [dict(row) for row in actions]
         used = {row["hero_id"] for row in actions if row["hero_id"]}
         current = None
@@ -303,13 +317,20 @@ class DraftService:
             kind, team = PHASES[game["phase_index"]]
             current = {"kind": kind, "team": team, "phase_index": game["phase_index"]}
         return {
-            "series": {"code": series["code"], "best_of": series["best_of"], "global_draft": bool(series["global_draft"]), "status": series["status"]},
+            "series": {
+                "code": series["code"],
+                "best_of": series["best_of"],
+                "global_draft": bool(series["global_draft"]),
+                "permanent_bans": bool(series["permanent_bans"]),
+                "status": series["status"],
+            },
             "game": {"number": game["game_number"], "status": game["status"], "blue_ready": bool(game["blue_ready"]), "red_ready": bool(game["red_ready"]), "deadline_at": game["deadline_at"], "timeout_team": game["timeout_team"], "blue_preselect": game["blue_preselect"], "red_preselect": game["red_preselect"]},
             "current": current,
             "actions": action_data,
             "heroes": [{**dict(row), "roles": __import__("json").loads(row["roles_json"])} for row in heroes],
             "used_hero_ids": sorted(used),
             "global_used_hero_ids": sorted(previous_picks),
+            "permanent_ban_hero_ids": sorted(previous_bans),
         }
 
     def _current(self, connection: Any, code: str) -> tuple[Any, Any]:
@@ -362,6 +383,8 @@ class DraftService:
             raise DraftError("该英雄已在本局被禁用或选择。")
         if series["global_draft"] and hero_id in self._previous_pick_ids(connection, series, game):
             raise DraftError("该英雄已在本系列赛前局被选择。")
+        if series["permanent_bans"] and hero_id in self._previous_ban_ids(connection, series, game):
+            raise DraftError("该英雄已在本系列赛前局被禁用。")
 
     def _previous_pick_ids(self, connection: Any, series: Any, game: Any) -> set[str]:
         if not series["global_draft"]:
@@ -369,6 +392,17 @@ class DraftService:
         rows = connection.execute(
             """SELECT draft_actions.hero_id FROM draft_actions JOIN games ON games.id = draft_actions.game_id
             WHERE games.series_id = ? AND games.game_number < ? AND draft_actions.action_kind = 'pick' AND draft_actions.hero_id IS NOT NULL""",
+            (series["id"], game["game_number"]),
+        ).fetchall()
+        return {row["hero_id"] for row in rows}
+
+    def _previous_ban_ids(self, connection: Any, series: Any, game: Any) -> set[str]:
+        """Return non-empty bans from prior games when permanent bans are enabled."""
+        if not series["permanent_bans"]:
+            return set()
+        rows = connection.execute(
+            """SELECT draft_actions.hero_id FROM draft_actions JOIN games ON games.id = draft_actions.game_id
+            WHERE games.series_id = ? AND games.game_number < ? AND draft_actions.action_kind = 'ban' AND draft_actions.hero_id IS NOT NULL""",
             (series["id"], game["game_number"]),
         ).fetchall()
         return {row["hero_id"] for row in rows}

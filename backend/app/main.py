@@ -26,6 +26,7 @@ class LoginRequest(BaseModel):
 class CreateSeriesRequest(BaseModel):
     best_of: int = 1
     global_draft: bool = True
+    permanent_bans: bool = False
 
 
 class ExtendSeriesRequest(BaseModel):
@@ -224,7 +225,7 @@ async def update_admin_hero_roles(hero_id: str, request: HeroRolesRequest, _: No
 async def create_admin_series(request: CreateSeriesRequest, _: None = Depends(require_admin)) -> dict[str, Any]:
     """Create a series from the standalone management console."""
     try:
-        return drafts.create_series(request.best_of, request.global_draft, "admin")
+        return drafts.create_series(request.best_of, request.global_draft, "admin", request.permanent_bans)
     except DraftError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -363,7 +364,7 @@ async def room_socket(socket: WebSocket, code: str, token: str) -> None:
 async def bot_create_series(request: CreateSeriesRequest, _: None = Depends(require_bot)) -> dict[str, Any]:
     """Optional bot endpoint for creating a series and receiving capability links."""
     try:
-        return drafts.create_series(request.best_of, request.global_draft, "bot")
+        return drafts.create_series(request.best_of, request.global_draft, "bot", request.permanent_bans)
     except DraftError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
